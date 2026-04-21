@@ -129,6 +129,55 @@ function require_login()
     }
 }
 
+function page_access_rules()
+{
+    return [
+        'dashboard.php' => ['admin', 'sales', 'cashier', 'purchasing', 'accounting', 'inventory'],
+        'register.php' => ['admin'],
+        'sales.php' => ['admin', 'sales'],
+        'cashier.php' => ['admin', 'cashier'],
+        'inventory.php' => ['admin', 'inventory'],
+        'purchasing.php' => ['admin', 'purchasing'],
+        'accounting.php' => ['admin', 'accounting'],
+        'reports.php' => ['admin', 'accounting'],
+    ];
+}
+
+function can_access_page($role, $pageFile)
+{
+    $rules = page_access_rules();
+    if (!isset($rules[$pageFile])) {
+        return true;
+    }
+
+    return in_array((string) $role, $rules[$pageFile], true);
+}
+
+function require_page_access($pageFile)
+{
+    $user = current_user();
+    if (!$user) {
+        require_login();
+        return;
+    }
+
+    if (!can_access_page($user['role'] ?? '', $pageFile)) {
+        $username = (string) ($user['username'] ?? 'unknown');
+        $role = (string) ($user['role'] ?? 'unknown');
+        $referenceNo = 'DENIED-' . substr((string) $pageFile, 0, 42);
+        $logMessage = 'Access denied to ' . $pageFile . ' for user ' . $username . ' (' . $role . ').';
+
+        try {
+            log_digital('Security', $referenceNo, $logMessage, (int) $user['id']);
+        } catch (Exception $exception) {
+            // Continue redirect flow even if audit logging fails.
+        }
+
+        set_flash('error', 'Access denied: your department role cannot open this page.');
+        redirect('dashboard.php');
+    }
+}
+
 function current_user()
 {
     if (!is_logged_in()) {

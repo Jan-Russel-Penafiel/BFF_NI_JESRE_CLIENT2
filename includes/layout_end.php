@@ -3,19 +3,6 @@
 </div>
 
 <script>
-    function syncBodyScrollLock() {
-        const hasOpenModal = Array.from(document.querySelectorAll('[data-modal-box]')).some(function (modal) {
-            return modal.classList.contains('flex');
-        });
-
-        if (hasOpenModal) {
-            document.body.classList.add('overflow-hidden');
-            return;
-        }
-
-        document.body.classList.remove('overflow-hidden');
-    }
-
     function openModalById(modalId) {
         const modal = document.getElementById(modalId);
         if (!modal) {
@@ -24,7 +11,6 @@
 
         modal.classList.remove('hidden');
         modal.classList.add('flex');
-        syncBodyScrollLock();
     }
 
     function closeModalById(modalId) {
@@ -35,7 +21,6 @@
 
         modal.classList.add('hidden');
         modal.classList.remove('flex');
-        syncBodyScrollLock();
     }
 
     document.addEventListener('click', function (event) {
@@ -68,8 +53,6 @@
                 modal.classList.remove('flex');
             }
         });
-
-        syncBodyScrollLock();
     });
 </script>
 </body>

@@ -1,9 +1,5 @@
 <?php
-require_once __DIR__ . '/includes/functions.php';
-
-if (is_logged_in()) {
-    redirect('dashboard.php');
-}
+require_once __DIR__ . '/includes/auth_guard.php';
 
 $error = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -33,8 +29,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 [$fullName, $username, $role, $hash]
             );
 
-            set_flash('success', 'Registration successful. You can now log in.');
-            redirect('index.php');
+            set_flash('success', 'User account created successfully.');
+            redirect('dashboard.php');
         }
     }
 }
@@ -92,7 +88,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
 
         <div class="flex items-center justify-between gap-3 pt-2">
-            <a href="index.php" class="text-sm font-medium text-slate-600 hover:text-slate-900">Back to login</a>
+            <a href="dashboard.php" class="text-sm font-medium text-slate-600 hover:text-slate-900">Back to dashboard</a>
             <button type="submit" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700">Register</button>
         </div>
     </form>

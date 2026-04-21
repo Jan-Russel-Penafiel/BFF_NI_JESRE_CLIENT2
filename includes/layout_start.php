@@ -11,8 +11,14 @@ $menuItems = [
     ['key' => 'inventory', 'label' => 'Inventory System', 'href' => 'inventory.php'],
     ['key' => 'purchasing', 'label' => 'Purchasing Department', 'href' => 'purchasing.php'],
     ['key' => 'accounting', 'label' => 'Accounting Department', 'href' => 'accounting.php'],
+    ['key' => 'users', 'label' => 'User Management', 'href' => 'register.php'],
     ['key' => 'reports', 'label' => 'Financial Reports', 'href' => 'reports.php'],
 ];
+
+$userRole = $user['role'] ?? '';
+$menuItems = array_values(array_filter($menuItems, function ($item) use ($userRole) {
+    return can_access_page($userRole, $item['href']);
+}));
 
 $flashClass = 'border border-blue-200 bg-blue-50 text-blue-900';
 if ($flash && $flash['type'] === 'success') {
@@ -53,32 +59,28 @@ if ($flash && $flash['type'] === 'error') {
         }
 
         [data-modal-box] {
-            position: fixed !important;
-            inset: 0 !important;
-            z-index: 70 !important;
-            padding: 1rem;
+            overflow-y: auto;
         }
 
-        [data-modal-box] [data-modal-overlay] {
+        [data-modal-box] > [data-modal-overlay] {
             position: fixed !important;
             inset: 0 !important;
-            background: rgba(15, 23, 42, 0.65);
         }
 
-        [data-modal-box] > .relative {
+        [data-modal-box] > *:not([data-modal-overlay]) {
             max-height: calc(100vh - 2rem);
             overflow-y: auto;
         }
     </style>
 </head>
 <body class="bg-slate-100 text-slate-800">
-<div class="min-h-screen">
-    <aside class="w-full bg-navy-900 p-4 text-white md:fixed md:inset-y-0 md:left-0 md:z-30 md:h-screen md:w-64 md:overflow-hidden">
+<div class="min-h-screen md:flex">
+    <aside class="w-full bg-navy-900 p-4 text-white md:sticky md:top-0 md:h-screen md:w-64 md:shrink-0 md:overflow-y-auto">
         <div class="mb-6 rounded-lg border border-white/20 bg-white/10 p-3">
             <p class="text-sm text-blue-100">TOPSPOT</p>
             <p class="text-lg font-semibold">Parts Trading POS</p>
         </div>
-        <nav class="space-y-1 md:overflow-hidden">
+        <nav class="space-y-1">
             <?php foreach ($menuItems as $item): ?>
                 <?php $isActive = $activePage === $item['key']; ?>
                 <a href="<?php echo e($item['href']); ?>"
@@ -89,7 +91,7 @@ if ($flash && $flash['type'] === 'error') {
         </nav>
     </aside>
 
-    <section class="flex-1 md:ml-64">
+    <section class="flex-1">
         <header class="flex flex-col gap-3 border-b border-slate-200 bg-white px-4 py-4 md:flex-row md:items-center md:justify-between md:px-6">
             <div>
                 <h1 class="text-lg font-semibold text-navy-900"><?php echo e($pageTitle); ?></h1>

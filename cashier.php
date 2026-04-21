@@ -6,6 +6,17 @@ $activePage = 'cashier';
 $user = current_user();
 $taxRate = 0.12;
 
+function official_receipt_number($payment)
+{
+    $paidAtRaw = $payment['paid_at'] ?? '';
+    $paidAt = strtotime((string) $paidAtRaw);
+    if ($paidAt === false) {
+        $paidAt = time();
+    }
+
+    return 'OR-' . date('Ymd', $paidAt) . '-' . str_pad((string) ((int) ($payment['id'] ?? 0)), 6, '0', STR_PAD_LEFT);
+}
+
 try {
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['action'] ?? '';
@@ -143,6 +154,39 @@ $orderItemsRows = db_select(
 $orderItemsMap = [];
 foreach ($orderItemsRows as $item) {
     $orderItemsMap[(int) $item['sales_order_id']][] = $item;
+}
+
+$receiptPayloadMap = [];
+foreach ($orders as $order) {
+    $orderId = (int) $order['id'];
+    if (!isset($paymentMap[$orderId])) {
+        continue;
+    }
+
+    $receipt = $paymentMap[$orderId];
+    $receiptPayloadMap[$orderId] = [
+        'orderId' => $orderId,
+        'orderNumber' => $order['order_number'],
+        'officialReceiptNo' => official_receipt_number($receipt),
+        'customerName' => $order['customer_name'],
+        'subtotal' => (float) $order['subtotal'],
+        'tax' => (float) $order['tax'],
+        'total' => (float) $order['total'],
+        'amountPaid' => (float) $receipt['amount_paid'],
+        'changeAmount' => (float) $receipt['change_amount'],
+        'paymentMethod' => strtoupper((string) ($receipt['payment_method'] ?? '')),
+        'cashierName' => $receipt['cashier_name'] ?? 'N/A',
+        'paidAt' => $receipt['paid_at'] ?? '',
+        'items' => array_map(function ($item) {
+            return [
+                'sku' => $item['sku'],
+                'partName' => $item['part_name'],
+                'qty' => (int) $item['qty'],
+                'unitPrice' => (float) $item['unit_price'],
+                'lineTotal' => (float) $item['line_total'],
+            ];
+        }, $orderItemsMap[$orderId] ?? []),
+    ];
 }
 
 require_once __DIR__ . '/includes/layout_start.php';
@@ -322,12 +366,14 @@ require_once __DIR__ . '/includes/layout_start.php';
             <div data-modal-overlay="receipt-modal-<?php echo e($order['id']); ?>" class="absolute inset-0 bg-slate-900/60"></div>
             <div class="relative z-10 w-full max-w-md rounded-xl bg-white p-5 shadow-2xl">
                 <div class="flex items-center justify-between">
-                    <h3 class="text-lg font-semibold text-navy-900">Payment Receipt</h3>
+                    <h3 class="text-lg font-semibold text-navy-900">Official Receipt</h3>
                     <button data-modal-close="receipt-modal-<?php echo e($order['id']); ?>" class="rounded bg-slate-100 px-2 py-1 text-sm">Close</button>
                 </div>
 
                 <div class="mt-3 space-y-1 text-sm">
+                    <p><span class="font-semibold text-slate-600">Official Receipt No:</span> <?php echo e(official_receipt_number($receipt)); ?></p>
                     <p><span class="font-semibold text-slate-600">Order No:</span> <?php echo e($order['order_number']); ?></p>
+                    <p><span class="font-semibold text-slate-600">Customer:</span> <?php echo e($order['customer_name']); ?></p>
                     <p><span class="font-semibold text-slate-600">Subtotal:</span> <?php echo e(format_currency($order['subtotal'])); ?></p>
                     <p><span class="font-semibold text-slate-600">Tax:</span> <?php echo e(format_currency($order['tax'])); ?></p>
                     <p><span class="font-semibold text-slate-600">Total:</span> <?php echo e(format_currency($order['total'])); ?></p>
@@ -337,21 +383,237 @@ require_once __DIR__ . '/includes/layout_start.php';
                     <p><span class="font-semibold text-slate-600">Cashier:</span> <?php echo e($receipt['cashier_name'] ?? 'N/A'); ?></p>
                     <p><span class="font-semibold text-slate-600">Paid At:</span> <?php echo e($receipt['paid_at']); ?></p>
                 </div>
+
+                <div class="mt-4 flex justify-end gap-2">
+                    <button
+                        type="button"
+                        class="receipt-print-btn rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                        data-order-id="<?php echo e($order['id']); ?>"
+                    >Print</button>
+                    <button
+                        type="button"
+                        class="receipt-pdf-btn rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
+                        data-order-id="<?php echo e($order['id']); ?>"
+                    >Download PDF</button>
+                </div>
             </div>
         </div>
     <?php endif; ?>
 <?php endforeach; ?>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script id="receipt-payload-map" type="application/json"><?php echo json_encode($receiptPayloadMap, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?></script>
 <script>
-    document.querySelectorAll('.open-payment-btn').forEach(function (button) {
-        button.addEventListener('click', function () {
-            document.getElementById('pay-order-id').value = button.dataset.orderId;
-            document.getElementById('pay-order-number').textContent = button.dataset.orderNumber;
-            document.getElementById('pay-subtotal').textContent = 'PHP ' + Number(button.dataset.subtotal).toFixed(2);
-            document.getElementById('pay-tax').textContent = 'PHP ' + Number(button.dataset.tax).toFixed(2);
-            document.getElementById('pay-total').textContent = 'PHP ' + Number(button.dataset.total).toFixed(2);
+    (function () {
+        const payloadElement = document.getElementById('receipt-payload-map');
+        let receiptPayloadMap = {};
+
+        if (payloadElement) {
+            try {
+                receiptPayloadMap = JSON.parse(payloadElement.textContent || '{}');
+            } catch (error) {
+                receiptPayloadMap = {};
+            }
+        }
+
+        function formatCurrency(value) {
+            return 'PHP ' + Number(value || 0).toLocaleString('en-PH', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            });
+        }
+
+        function escapeHtml(value) {
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/\"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function getReceiptData(orderId) {
+            return receiptPayloadMap[String(orderId)] || null;
+        }
+
+        function printOfficialReceipt(orderId) {
+            const receipt = getReceiptData(orderId);
+            if (!receipt) {
+                alert('Receipt details are unavailable.');
+                return;
+            }
+
+            const itemRows = (receipt.items || []).map(function (item, index) {
+                return '<tr>' +
+                    '<td style="padding:6px 4px;border-bottom:1px solid #e2e8f0;">' + (index + 1) + '</td>' +
+                    '<td style="padding:6px 4px;border-bottom:1px solid #e2e8f0;">' + escapeHtml(item.sku) + '</td>' +
+                    '<td style="padding:6px 4px;border-bottom:1px solid #e2e8f0;">' + escapeHtml(item.partName) + '</td>' +
+                    '<td style="padding:6px 4px;border-bottom:1px solid #e2e8f0;text-align:right;">' + escapeHtml(item.qty) + '</td>' +
+                    '<td style="padding:6px 4px;border-bottom:1px solid #e2e8f0;text-align:right;">' + escapeHtml(formatCurrency(item.unitPrice)) + '</td>' +
+                    '<td style="padding:6px 4px;border-bottom:1px solid #e2e8f0;text-align:right;">' + escapeHtml(formatCurrency(item.lineTotal)) + '</td>' +
+                    '</tr>';
+            }).join('');
+
+            const popup = window.open('', '_blank', 'width=900,height=900');
+            if (!popup) {
+                alert('Allow pop-ups to print receipts.');
+                return;
+            }
+
+            const printableHtml = '<!DOCTYPE html>' +
+                '<html><head><meta charset="UTF-8"><title>Official Receipt ' + escapeHtml(receipt.orderNumber) + '</title>' +
+                '<style>body{font-family:Arial,sans-serif;color:#0f172a;padding:24px;}h1{margin:0 0 4px;font-size:20px;}h2{margin:0 0 14px;font-size:14px;color:#334155;}table{width:100%;border-collapse:collapse;font-size:12px;}th{padding:6px 4px;text-align:left;border-bottom:2px solid #cbd5e1;background:#f8fafc;} .totals{margin-top:12px;font-size:12px;} .totals p{margin:4px 0;} .sign{margin-top:24px;font-size:11px;color:#475569;}</style>' +
+                '</head><body>' +
+                '<h1>TOPSPOT Motorcycle Parts Trading</h1>' +
+                '<h2>Official Receipt</h2>' +
+                '<p><strong>OR No:</strong> ' + escapeHtml(receipt.officialReceiptNo) + '</p>' +
+                '<p><strong>Order No:</strong> ' + escapeHtml(receipt.orderNumber) + '</p>' +
+                '<p><strong>Customer:</strong> ' + escapeHtml(receipt.customerName) + '</p>' +
+                '<p><strong>Cashier:</strong> ' + escapeHtml(receipt.cashierName) + '</p>' +
+                '<p><strong>Payment Method:</strong> ' + escapeHtml(receipt.paymentMethod) + '</p>' +
+                '<p><strong>Paid At:</strong> ' + escapeHtml(receipt.paidAt) + '</p>' +
+                '<table><thead><tr><th>#</th><th>SKU</th><th>Part</th><th style="text-align:right;">Qty</th><th style="text-align:right;">Unit Price</th><th style="text-align:right;">Line Total</th></tr></thead><tbody>' +
+                (itemRows || '<tr><td colspan="6" style="padding:8px 4px;color:#64748b;">No item lines found.</td></tr>') +
+                '</tbody></table>' +
+                '<div class="totals">' +
+                '<p><strong>Subtotal:</strong> ' + escapeHtml(formatCurrency(receipt.subtotal)) + '</p>' +
+                '<p><strong>Tax:</strong> ' + escapeHtml(formatCurrency(receipt.tax)) + '</p>' +
+                '<p><strong>Total:</strong> ' + escapeHtml(formatCurrency(receipt.total)) + '</p>' +
+                '<p><strong>Amount Paid:</strong> ' + escapeHtml(formatCurrency(receipt.amountPaid)) + '</p>' +
+                '<p><strong>Change:</strong> ' + escapeHtml(formatCurrency(receipt.changeAmount)) + '</p>' +
+                '</div>' +
+                '<p class="sign">This document serves as the official receipt for this transaction.</p>' +
+                '</body></html>';
+
+            popup.document.open();
+            popup.document.write(printableHtml);
+            popup.document.close();
+            popup.focus();
+            popup.print();
+        }
+
+        function downloadOfficialReceiptPdf(orderId) {
+            const receipt = getReceiptData(orderId);
+            if (!receipt) {
+                alert('Receipt details are unavailable.');
+                return;
+            }
+
+            if (!window.jspdf || typeof window.jspdf.jsPDF !== 'function') {
+                alert('PDF library failed to load. Please refresh and try again.');
+                return;
+            }
+
+            const jsPDF = window.jspdf.jsPDF;
+            const doc = new jsPDF({
+                orientation: 'portrait',
+                unit: 'mm',
+                format: 'a4'
+            });
+
+            let y = 14;
+            const lineHeight = 5;
+            const pageBottom = 285;
+            const contentWidth = 182;
+
+            function ensureSpace(extraHeight) {
+                if (y + extraHeight > pageBottom) {
+                    doc.addPage();
+                    y = 14;
+                }
+            }
+
+            function writeLabelValue(label, value) {
+                ensureSpace(lineHeight);
+                doc.setFont('helvetica', 'bold');
+                doc.text(label, 14, y);
+                doc.setFont('helvetica', 'normal');
+                doc.text(String(value || ''), 62, y);
+                y += lineHeight;
+            }
+
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(14);
+            doc.setTextColor(11, 31, 77);
+            doc.text('TOPSPOT Motorcycle Parts Trading', 14, y);
+            y += 6;
+
+            doc.setFontSize(12);
+            doc.text('Official Receipt', 14, y);
+            y += 8;
+
+            doc.setTextColor(15, 23, 42);
+            doc.setFontSize(10);
+            writeLabelValue('OR No:', receipt.officialReceiptNo);
+            writeLabelValue('Order No:', receipt.orderNumber);
+            writeLabelValue('Customer:', receipt.customerName);
+            writeLabelValue('Cashier:', receipt.cashierName);
+            writeLabelValue('Payment Method:', receipt.paymentMethod);
+            writeLabelValue('Paid At:', receipt.paidAt);
+
+            y += 2;
+            ensureSpace(8);
+            doc.setFont('helvetica', 'bold');
+            doc.text('Items', 14, y);
+            y += 5;
+
+            doc.setFont('helvetica', 'normal');
+            if (!receipt.items || receipt.items.length === 0) {
+                doc.text('No item lines found.', 14, y);
+                y += lineHeight;
+            } else {
+                receipt.items.forEach(function (item, index) {
+                    const lineText = (index + 1) + '. ' + String(item.sku || '-') + ' | ' +
+                        String(item.partName || '-') + ' | Qty: ' + String(item.qty || 0) +
+                        ' | Unit: ' + formatCurrency(item.unitPrice) +
+                        ' | Total: ' + formatCurrency(item.lineTotal);
+
+                    const wrapped = doc.splitTextToSize(lineText, contentWidth);
+                    ensureSpace(wrapped.length * lineHeight);
+                    doc.text(wrapped, 14, y);
+                    y += wrapped.length * lineHeight;
+                });
+            }
+
+            y += 3;
+            writeLabelValue('Subtotal:', formatCurrency(receipt.subtotal));
+            writeLabelValue('Tax:', formatCurrency(receipt.tax));
+            writeLabelValue('Total:', formatCurrency(receipt.total));
+            writeLabelValue('Amount Paid:', formatCurrency(receipt.amountPaid));
+            writeLabelValue('Change:', formatCurrency(receipt.changeAmount));
+
+            y += 6;
+            ensureSpace(lineHeight);
+            doc.setFont('helvetica', 'italic');
+            doc.setFontSize(9);
+            doc.text('This document serves as the official receipt for this transaction.', 14, y);
+
+            const fileSafeOrder = String(receipt.orderNumber || 'receipt').replace(/[^a-z0-9\-]+/gi, '_');
+            doc.save('official-receipt-' + fileSafeOrder + '.pdf');
+        }
+
+        document.querySelectorAll('.open-payment-btn').forEach(function (button) {
+            button.addEventListener('click', function () {
+                document.getElementById('pay-order-id').value = button.dataset.orderId;
+                document.getElementById('pay-order-number').textContent = button.dataset.orderNumber;
+                document.getElementById('pay-subtotal').textContent = 'PHP ' + Number(button.dataset.subtotal).toFixed(2);
+                document.getElementById('pay-tax').textContent = 'PHP ' + Number(button.dataset.tax).toFixed(2);
+                document.getElementById('pay-total').textContent = 'PHP ' + Number(button.dataset.total).toFixed(2);
+            });
         });
-    });
+
+        document.querySelectorAll('.receipt-print-btn').forEach(function (button) {
+            button.addEventListener('click', function () {
+                printOfficialReceipt(button.dataset.orderId);
+            });
+        });
+
+        document.querySelectorAll('.receipt-pdf-btn').forEach(function (button) {
+            button.addEventListener('click', function () {
+                downloadOfficialReceiptPdf(button.dataset.orderId);
+            });
+        });
+    })();
 </script>
 
 <?php require_once __DIR__ . '/includes/layout_end.php'; ?>

@@ -81,31 +81,6 @@ $recentPostings = db_select(
     [$startDate, $endDate]
 );
 
-$pdfReportData = [
-    'period' => [
-        'start' => $startDate,
-        'end' => $endDate,
-    ],
-    'incomeStatement' => [
-        'salesRevenue' => (float) $salesRevenue,
-        'cogs' => (float) $cogs,
-        'grossProfit' => (float) $grossProfit,
-        'operatingExpenses' => (float) $operatingExpenses,
-        'netIncome' => (float) $netIncome,
-        'taxCollected' => (float) $taxCollected,
-    ],
-    'balanceSheet' => [
-        'cashAsset' => (float) $cashAsset,
-        'inventoryAsset' => (float) $inventoryAsset,
-        'totalAssets' => (float) $totalAssets,
-        'accountsPayable' => (float) $accountsPayable,
-        'taxPayable' => (float) $taxPayable,
-        'totalLiabilities' => (float) $totalLiabilities,
-        'totalEquity' => (float) $totalEquity,
-    ],
-    'postingSummary' => $postingSummary,
-];
-
 require_once __DIR__ . '/includes/layout_start.php';
 ?>
 <div class="rounded-xl border border-slate-200 bg-white p-5">
@@ -124,7 +99,7 @@ require_once __DIR__ . '/includes/layout_start.php';
         <div class="md:col-span-2 flex items-end gap-2">
             <button type="submit" class="rounded-md bg-navy-900 px-4 py-2 text-sm font-semibold text-white hover:bg-navy-700">Apply Date Range</button>
             <a href="reports.php" class="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Reset</a>
-            <button type="button" id="print-report-pdf" class="rounded-md border border-navy-900 px-4 py-2 text-sm font-semibold text-navy-900 hover:bg-navy-50">Print PDF</button>
+            <button type="button" id="print-report-pdf" class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Print PDF</button>
         </div>
     </form>
 </div>
@@ -272,6 +247,7 @@ require_once __DIR__ . '/includes/layout_start.php';
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script>
     (function () {
         const printButton = document.getElementById('print-report-pdf');
@@ -279,131 +255,140 @@ require_once __DIR__ . '/includes/layout_start.php';
             return;
         }
 
-        const reportData = <?php echo json_encode($pdfReportData, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP); ?>;
+        const startDate = <?php echo json_encode($startDate, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+        const endDate = <?php echo json_encode($endDate, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
 
-        function formatMoney(value) {
+        const summaryValues = {
+            salesRevenue: Number(<?php echo json_encode((float) $salesRevenue); ?>),
+            cogs: Number(<?php echo json_encode((float) $cogs); ?>),
+            grossProfit: Number(<?php echo json_encode((float) $grossProfit); ?>),
+            operatingExpenses: Number(<?php echo json_encode((float) $operatingExpenses); ?>),
+            netIncome: Number(<?php echo json_encode((float) $netIncome); ?>),
+            taxCollected: Number(<?php echo json_encode((float) $taxCollected); ?>),
+            cashAsset: Number(<?php echo json_encode((float) $cashAsset); ?>),
+            inventoryAsset: Number(<?php echo json_encode((float) $inventoryAsset); ?>),
+            totalAssets: Number(<?php echo json_encode((float) $totalAssets); ?>),
+            accountsPayable: Number(<?php echo json_encode((float) $accountsPayable); ?>),
+            taxPayable: Number(<?php echo json_encode((float) $taxPayable); ?>),
+            totalLiabilities: Number(<?php echo json_encode((float) $totalLiabilities); ?>),
+            totalEquity: Number(<?php echo json_encode((float) $totalEquity); ?>)
+        };
+
+        const postingSummaryRows = <?php echo json_encode($postingSummary, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?> || [];
+        const recentPostingRows = <?php echo json_encode($recentPostings, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?> || [];
+
+        function formatCurrency(value) {
             return 'PHP ' + Number(value || 0).toLocaleString('en-PH', {
                 minimumFractionDigits: 2,
                 maximumFractionDigits: 2
             });
         }
 
-        function ensurePage(doc, currentY) {
-            if (currentY <= 780) {
-                return currentY;
-            }
-
-            doc.addPage();
-            return 48;
-        }
-
         printButton.addEventListener('click', function () {
-            if (!window.jspdf || !window.jspdf.jsPDF) {
-                window.alert('Unable to load jsPDF. Please check internet connection and try again.');
+            if (!window.jspdf || typeof window.jspdf.jsPDF !== 'function') {
+                alert('PDF library failed to load. Please refresh and try again.');
                 return;
             }
 
-            const { jsPDF } = window.jspdf;
-            const doc = new jsPDF({ unit: 'pt', format: 'a4' });
-            const left = 42;
-            const right = 553;
-            let y = 48;
-
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(16);
-            doc.setTextColor(11, 31, 77);
-            doc.text('TOPSPOT Financial Report', left, y);
-
-            y += 20;
-            doc.setFont('helvetica', 'normal');
-            doc.setFontSize(10);
-            doc.setTextColor(71, 85, 105);
-            doc.text('Period: ' + reportData.period.start + ' to ' + reportData.period.end, left, y);
-
-            y += 28;
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(13);
-            doc.setTextColor(11, 31, 77);
-            doc.text('Income Statement', left, y);
-
-            y += 18;
-            doc.setFont('helvetica', 'normal');
-            doc.setFontSize(11);
-            doc.setTextColor(15, 23, 42);
-
-            const incomeRows = [
-                ['Sales Revenue', formatMoney(reportData.incomeStatement.salesRevenue)],
-                ['Cost of Goods Sold', '(' + formatMoney(reportData.incomeStatement.cogs) + ')'],
-                ['Gross Profit', formatMoney(reportData.incomeStatement.grossProfit)],
-                ['Operating Expenses', '(' + formatMoney(reportData.incomeStatement.operatingExpenses) + ')'],
-                ['Net Income', formatMoney(reportData.incomeStatement.netIncome)],
-                ['Tax Collected', formatMoney(reportData.incomeStatement.taxCollected)]
-            ];
-
-            incomeRows.forEach(function (row, index) {
-                y = ensurePage(doc, y);
-                doc.setFont('helvetica', index === 4 ? 'bold' : 'normal');
-                doc.text(row[0], left, y);
-                doc.text(row[1], right, y, { align: 'right' });
-                y += 18;
+            const jsPDF = window.jspdf.jsPDF;
+            const doc = new jsPDF({
+                orientation: 'portrait',
+                unit: 'mm',
+                format: 'a4'
             });
 
-            y += 10;
-            y = ensurePage(doc, y);
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(13);
-            doc.setTextColor(11, 31, 77);
-            doc.text('Balance Sheet', left, y);
-
-            y += 18;
-            doc.setFont('helvetica', 'normal');
-            doc.setFontSize(11);
-            doc.setTextColor(15, 23, 42);
-
-            const balanceRows = [
-                ['Cash', formatMoney(reportData.balanceSheet.cashAsset)],
-                ['Inventory Asset', formatMoney(reportData.balanceSheet.inventoryAsset)],
-                ['Total Assets', formatMoney(reportData.balanceSheet.totalAssets)],
-                ['Accounts Payable', formatMoney(reportData.balanceSheet.accountsPayable)],
-                ['Tax Payable', formatMoney(reportData.balanceSheet.taxPayable)],
-                ['Total Liabilities', formatMoney(reportData.balanceSheet.totalLiabilities)],
-                ['Equity', formatMoney(reportData.balanceSheet.totalEquity)]
-            ];
-
-            balanceRows.forEach(function (row, index) {
-                y = ensurePage(doc, y);
-                doc.setFont('helvetica', index === 2 || index === 5 || index === 6 ? 'bold' : 'normal');
-                doc.text(row[0], left, y);
-                doc.text(row[1], right, y, { align: 'right' });
-                y += 18;
-            });
-
-            y += 10;
-            y = ensurePage(doc, y);
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(13);
-            doc.setTextColor(11, 31, 77);
-            doc.text('Posting Summary', left, y);
-
-            y += 18;
-            doc.setFont('helvetica', 'normal');
-            doc.setFontSize(10);
-            doc.setTextColor(15, 23, 42);
-
-            if (!Array.isArray(reportData.postingSummary) || reportData.postingSummary.length === 0) {
-                y = ensurePage(doc, y);
-                doc.text('No postings in selected period.', left, y);
-            } else {
-                reportData.postingSummary.forEach(function (row) {
-                    y = ensurePage(doc, y);
-                    const line = String(row.txn_type) + ': Entries ' + String(row.total_entries) + ', Debit ' + formatMoney(row.debit_total) + ', Credit ' + formatMoney(row.credit_total);
-                    doc.text(line, left, y);
-                    y += 15;
-                });
+            if (typeof doc.autoTable !== 'function') {
+                alert('PDF table plugin failed to load. Please refresh and try again.');
+                return;
             }
 
-            const filename = 'TOPSPOT_Financial_Report_' + reportData.period.start + '_to_' + reportData.period.end + '.pdf';
-            doc.save(filename);
+            doc.setFontSize(16);
+            doc.setTextColor(11, 31, 77);
+            doc.text('Automated Posting and Financial Reports', 14, 15);
+
+            doc.setFontSize(10);
+            doc.setTextColor(71, 85, 105);
+            doc.text('Period: ' + startDate + ' to ' + endDate, 14, 21);
+
+            doc.autoTable({
+                startY: 26,
+                head: [['Income Statement', 'Amount']],
+                body: [
+                    ['Sales Revenue', formatCurrency(summaryValues.salesRevenue)],
+                    ['Cost of Goods Sold', '(' + formatCurrency(summaryValues.cogs) + ')'],
+                    ['Gross Profit', formatCurrency(summaryValues.grossProfit)],
+                    ['Operating Expenses', '(' + formatCurrency(summaryValues.operatingExpenses) + ')'],
+                    ['Net Income', formatCurrency(summaryValues.netIncome)],
+                    ['Tax Collected', formatCurrency(summaryValues.taxCollected)]
+                ],
+                theme: 'grid',
+                headStyles: { fillColor: [16, 44, 91] },
+                styles: { fontSize: 9 }
+            });
+
+            doc.autoTable({
+                startY: doc.lastAutoTable.finalY + 6,
+                head: [['Balance Sheet', 'Amount']],
+                body: [
+                    ['Cash', formatCurrency(summaryValues.cashAsset)],
+                    ['Inventory Asset', formatCurrency(summaryValues.inventoryAsset)],
+                    ['Total Assets', formatCurrency(summaryValues.totalAssets)],
+                    ['Accounts Payable', formatCurrency(summaryValues.accountsPayable)],
+                    ['Tax Payable', formatCurrency(summaryValues.taxPayable)],
+                    ['Total Liabilities', formatCurrency(summaryValues.totalLiabilities)],
+                    ['Equity', formatCurrency(summaryValues.totalEquity)]
+                ],
+                theme: 'grid',
+                headStyles: { fillColor: [16, 44, 91] },
+                styles: { fontSize: 9 }
+            });
+
+            const postingBody = postingSummaryRows.length
+                ? postingSummaryRows.map(function (item) {
+                    return [
+                        String(item.txn_type || '-'),
+                        String(item.total_entries || '0'),
+                        formatCurrency(item.debit_total),
+                        formatCurrency(item.credit_total)
+                    ];
+                })
+                : [['No postings in selected period.', '', '', '']];
+
+            doc.autoTable({
+                startY: doc.lastAutoTable.finalY + 6,
+                head: [['Automated Posting Summary', 'Entries', 'Debit Total', 'Credit Total']],
+                body: postingBody,
+                theme: 'grid',
+                headStyles: { fillColor: [16, 44, 91] },
+                styles: { fontSize: 8 }
+            });
+
+            const recentBody = recentPostingRows.length
+                ? recentPostingRows.map(function (entry) {
+                    return [
+                        String(entry.posted_at || '-'),
+                        String(entry.reference_no || '-'),
+                        String(entry.account_title || '-'),
+                        formatCurrency(entry.debit),
+                        formatCurrency(entry.credit),
+                        String(entry.description || '-')
+                    ];
+                })
+                : [['No recent postings found.', '', '', '', '', '']];
+
+            doc.autoTable({
+                startY: doc.lastAutoTable.finalY + 6,
+                head: [['Date', 'Reference', 'Account', 'Debit', 'Credit', 'Description']],
+                body: recentBody,
+                theme: 'grid',
+                headStyles: { fillColor: [16, 44, 91] },
+                styles: { fontSize: 7 },
+                columnStyles: {
+                    5: { cellWidth: 45 }
+                }
+            });
+
+            doc.save('financial-report-' + startDate + '-to-' + endDate + '.pdf');
         });
     })();
 </script>
