@@ -43,9 +43,9 @@ try {
                 throw new Exception('Invalid purchase order update data.');
             }
 
-            $allowedStatus = ['requested', 'received', 'cancelled'];
+            $allowedStatus = ['requested', 'cancelled'];
             if (!in_array($status, $allowedStatus, true)) {
-                throw new Exception('Invalid purchase order status selected.');
+                throw new Exception('Invalid purchase order status selected. Use receive action when goods arrive.');
             }
 
             db_exec_only(
@@ -91,6 +91,10 @@ try {
                 throw new Exception('This purchase order is already marked as received.');
             }
 
+            if ($purchaseOrder['status'] !== 'requested') {
+                throw new Exception('Only requested purchase orders can be received.');
+            }
+
             $newStock = (int) $purchaseOrder['stock_qty'] + $qtyReceived;
             $inventoryValue = (float) $purchaseOrder['cost_price'] * $qtyReceived;
 
@@ -129,9 +133,17 @@ try {
             post_ledger('PURCHASE', $purchaseOrder['po_number'], 'Inventory Asset', $inventoryValue, 0, 'Inventory increase from supplier receiving');
             post_ledger('PURCHASE', $purchaseOrder['po_number'], 'Accounts Payable', 0, $inventoryValue, 'Liability for supplier order receiving');
 
+            $releasedOrders = release_pending_sales_orders_for_part((int) $purchaseOrder['part_id'], (int) $user['id']);
+            check_and_raise_low_stock((int) $purchaseOrder['part_id'], $purchaseOrder['po_number'], (int) $user['id']);
+
             db_commit();
 
-            set_flash('success', 'Goods received and inventory updated.');
+            $successMessage = 'Goods received and inventory updated.';
+            if ($releasedOrders > 0) {
+                $successMessage .= ' ' . $releasedOrders . ' pending sales order(s) moved to cashier queue.';
+            }
+
+            set_flash('success', $successMessage);
             redirect('purchasing.php');
         }
     }
@@ -228,13 +240,15 @@ require_once __DIR__ . '/includes/layout_start.php';
                                             data-notes="<?php echo e($po['notes']); ?>"
                                         >Edit</button>
 
-                                        <button
-                                            data-modal-open="receive-po-modal"
-                                            class="receive-po-btn rounded border border-emerald-300 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-50"
-                                            data-po-id="<?php echo e($po['id']); ?>"
-                                            data-po-number="<?php echo e($po['po_number']); ?>"
-                                            data-qty-ordered="<?php echo e($po['qty_ordered']); ?>"
-                                        >Receive</button>
+                                        <?php if ($po['status'] === 'requested'): ?>
+                                            <button
+                                                data-modal-open="receive-po-modal"
+                                                class="receive-po-btn rounded border border-emerald-300 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-50"
+                                                data-po-id="<?php echo e($po['id']); ?>"
+                                                data-po-number="<?php echo e($po['po_number']); ?>"
+                                                data-qty-ordered="<?php echo e($po['qty_ordered']); ?>"
+                                            >Receive</button>
+                                        <?php endif; ?>
 
                                         <button
                                             data-modal-open="delete-po-modal"
@@ -329,7 +343,6 @@ require_once __DIR__ . '/includes/layout_start.php';
                 <label class="mb-1 block text-sm font-medium text-slate-700">Status</label>
                 <select id="edit-status" name="status" class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" required>
                     <option value="requested">Requested</option>
-                    <option value="received">Received</option>
                     <option value="cancelled">Cancelled</option>
                 </select>
             </div>

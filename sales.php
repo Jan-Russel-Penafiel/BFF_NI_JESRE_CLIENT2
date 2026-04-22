@@ -141,6 +141,10 @@ try {
                 throw new Exception('Invalid status selected.');
             }
 
+            if ($status === 'ready_for_cashier' && !sales_order_has_available_stock($orderId)) {
+                throw new Exception('Order cannot be set to ready for cashier while stock is still unavailable.');
+            }
+
             db_exec_only(
                 'UPDATE sales_orders SET customer_name = ?, status = ? WHERE id = ? AND status != "paid"',
                 'ssi',

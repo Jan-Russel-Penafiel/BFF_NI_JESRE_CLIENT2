@@ -23,11 +23,13 @@ try {
                 throw new Exception('SKU, part name, and supplier are required.');
             }
 
-            db_insert(
+            $partId = db_insert(
                 'INSERT INTO parts (sku, part_name, description, supplier_name, cost_price, unit_price, stock_qty, threshold_qty) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
                 'ssssddii',
                 [$sku, $partName, $description, $supplierName, $costPrice, $unitPrice, $stockQty, $thresholdQty]
             );
+
+            check_and_raise_low_stock((int) $partId, 'INV-' . $sku, (int) $user['id']);
 
             log_digital('Inventory System', $sku, 'Created new inventory item ' . $partName, (int) $user['id']);
             set_flash('success', 'Part created successfully.');
@@ -54,6 +56,8 @@ try {
                 'ssssddiii',
                 [$sku, $partName, $description, $supplierName, $costPrice, $unitPrice, $stockQty, $thresholdQty, $partId]
             );
+
+            check_and_raise_low_stock((int) $partId, 'INV-' . $sku, (int) $user['id']);
 
             log_digital('Inventory System', $sku, 'Updated inventory item ' . $partName, (int) $user['id']);
             set_flash('success', 'Part updated successfully.');
@@ -89,7 +93,8 @@ try {
                 $qtyToOrder,
                 (int) $user['id'],
                 'INV-' . $part['sku'],
-                'Manual prepare order from inventory threshold review'
+                'Manual prepare order from inventory threshold review',
+                'set_max'
             );
 
             set_flash('success', 'Supplier order prepared for ' . $part['part_name'] . '.');
@@ -100,6 +105,8 @@ try {
     set_flash('error', $exception->getMessage());
     redirect('inventory.php');
 }
+
+run_inventory_threshold_monitor((int) $user['id'], 'INV-SCAN-' . date('Ymd'));
 
 $parts = db_select('SELECT * FROM parts ORDER BY part_name ASC');
 $inventoryLogs = db_select(

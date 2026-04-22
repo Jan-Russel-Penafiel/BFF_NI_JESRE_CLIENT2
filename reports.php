@@ -21,12 +21,18 @@ if ($startDate > $endDate) {
 }
 
 $salesRevenue = sum_value(
-    'SELECT COALESCE(SUM(subtotal), 0) FROM sales_orders WHERE status = "paid" AND DATE(created_at) BETWEEN ? AND ?',
+    'SELECT COALESCE(SUM(s.subtotal), 0)
+     FROM sales_orders s
+     INNER JOIN payments p ON p.sales_order_id = s.id
+     WHERE s.status = "paid" AND DATE(p.paid_at) BETWEEN ? AND ?',
     'ss',
     [$startDate, $endDate]
 );
 $taxCollected = sum_value(
-    'SELECT COALESCE(SUM(tax), 0) FROM sales_orders WHERE status = "paid" AND DATE(created_at) BETWEEN ? AND ?',
+    'SELECT COALESCE(SUM(s.tax), 0)
+     FROM sales_orders s
+     INNER JOIN payments p ON p.sales_order_id = s.id
+     WHERE s.status = "paid" AND DATE(p.paid_at) BETWEEN ? AND ?',
     'ss',
     [$startDate, $endDate]
 );

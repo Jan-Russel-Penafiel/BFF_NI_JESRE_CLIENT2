@@ -233,28 +233,46 @@ function insert_inventory_log($partId, $logType, $qtyChange, $resultingStock, $r
     );
 }
 
-function create_purchase_request($partId, $qty, $requestedBy, $sourceReference, $notes)
+function create_purchase_request($partId, $qty, $requestedBy, $sourceReference, $notes, $mergeMode = 'append')
 {
     if ($qty <= 0) {
         return;
     }
 
+    $allowedMergeModes = ['append', 'set_max', 'keep_existing'];
+    if (!in_array($mergeMode, $allowedMergeModes, true)) {
+        $mergeMode = 'append';
+    }
+
     $existing = db_select_one(
-        'SELECT id, qty_ordered FROM purchase_orders WHERE part_id = ? AND status = "requested" LIMIT 1',
+        'SELECT id, po_number, qty_ordered FROM purchase_orders WHERE part_id = ? AND status = "requested" LIMIT 1',
         'i',
         [$partId]
     );
 
     if ($existing) {
-        $newQty = (int) $existing['qty_ordered'] + $qty;
-        db_exec_only('UPDATE purchase_orders SET qty_ordered = ? WHERE id = ?', 'ii', [$newQty, (int) $existing['id']]);
+        $existingQty = (int) $existing['qty_ordered'];
+        $newQty = $existingQty;
 
-        log_digital(
-            'Purchasing Department',
-            $sourceReference,
-            'Updated existing supplier order quantity for part ID ' . $partId,
-            $requestedBy
-        );
+        if ($mergeMode === 'append') {
+            $newQty = $existingQty + $qty;
+        }
+
+        if ($mergeMode === 'set_max') {
+            $newQty = max($existingQty, $qty);
+        }
+
+        if ($newQty !== $existingQty) {
+            db_exec_only('UPDATE purchase_orders SET qty_ordered = ? WHERE id = ?', 'ii', [$newQty, (int) $existing['id']]);
+
+            log_digital(
+                'Purchasing Department',
+                (string) $existing['po_number'],
+                'Updated existing supplier order quantity for part ID ' . $partId,
+                $requestedBy
+            );
+        }
+
         return;
     }
 
@@ -268,28 +286,130 @@ function create_purchase_request($partId, $qty, $requestedBy, $sourceReference, 
     log_digital('Purchasing Department', $poNumber, 'Prepared order to supplier: ' . $notes, $requestedBy);
 }
 
+function sales_order_has_available_stock($salesOrderId)
+{
+    $items = db_select(
+        'SELECT soi.qty, p.stock_qty
+         FROM sales_order_items soi
+         INNER JOIN parts p ON p.id = soi.part_id
+         WHERE soi.sales_order_id = ?',
+        'i',
+        [$salesOrderId]
+    );
+
+    if (empty($items)) {
+        return false;
+    }
+
+    foreach ($items as $item) {
+        if ((int) $item['qty'] > (int) $item['stock_qty']) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+function sync_sales_order_stock_status($salesOrderId, $updatedBy = null)
+{
+    $order = db_select_one('SELECT id, order_number, status FROM sales_orders WHERE id = ? LIMIT 1', 'i', [$salesOrderId]);
+    if (!$order) {
+        return false;
+    }
+
+    $currentStatus = (string) $order['status'];
+    if ($currentStatus === 'paid' || $currentStatus === 'cancelled') {
+        return false;
+    }
+
+    $targetStatus = sales_order_has_available_stock((int) $order['id']) ? 'ready_for_cashier' : 'pending_stock';
+    if ($targetStatus === $currentStatus) {
+        return false;
+    }
+
+    db_exec_only('UPDATE sales_orders SET status = ? WHERE id = ?', 'si', [$targetStatus, (int) $order['id']]);
+
+    if ($updatedBy !== null) {
+        $message = $targetStatus === 'ready_for_cashier'
+            ? 'Stock replenished. Sales order moved to cashier queue automatically.'
+            : 'Sales order moved back to pending stock due to unavailable quantity.';
+
+        log_digital('Inventory Check', (string) $order['order_number'], $message, (int) $updatedBy);
+    }
+
+    return true;
+}
+
+function release_pending_sales_orders_for_part($partId, $updatedBy = null)
+{
+    $rows = db_select(
+        'SELECT DISTINCT so.id
+         FROM sales_orders so
+         INNER JOIN sales_order_items soi ON soi.sales_order_id = so.id
+         WHERE so.status = "pending_stock" AND soi.part_id = ?',
+        'i',
+        [$partId]
+    );
+
+    $releasedCount = 0;
+    foreach ($rows as $row) {
+        if (sync_sales_order_stock_status((int) $row['id'], $updatedBy)) {
+            $releasedCount++;
+        }
+    }
+
+    return $releasedCount;
+}
+
+function digital_log_exists($moduleName, $referenceNo, $message)
+{
+    $existing = db_select_one(
+        'SELECT id FROM digital_logs WHERE module_name = ? AND reference_no = ? AND log_message = ? LIMIT 1',
+        'sss',
+        [$moduleName, $referenceNo, $message]
+    );
+
+    return $existing !== null;
+}
+
+function threshold_inventory_log_exists($partId, $referenceNo)
+{
+    $existing = db_select_one(
+        'SELECT id FROM inventory_logs WHERE part_id = ? AND log_type = "threshold" AND reference_no = ? LIMIT 1',
+        'is',
+        [$partId, $referenceNo]
+    );
+
+    return $existing !== null;
+}
+
 function check_and_raise_low_stock($partId, $referenceNo, $requestedBy)
 {
     $part = db_select_one('SELECT * FROM parts WHERE id = ? LIMIT 1', 'i', [$partId]);
 
     if (!$part) {
-        return;
+        return false;
     }
 
-    if ((int) $part['stock_qty'] <= (int) $part['threshold_qty']) {
-        $qtyToOrder = ((int) $part['threshold_qty'] * 2) - (int) $part['stock_qty'];
-        if ($qtyToOrder < 1) {
-            $qtyToOrder = (int) $part['threshold_qty'];
-        }
+    if ((int) $part['stock_qty'] > (int) $part['threshold_qty']) {
+        return false;
+    }
 
-        create_purchase_request(
-            (int) $part['id'],
-            $qtyToOrder,
-            $requestedBy,
-            $referenceNo,
-            'Automatic low-stock reorder for ' . $part['part_name']
-        );
+    $qtyToOrder = ((int) $part['threshold_qty'] * 2) - (int) $part['stock_qty'];
+    if ($qtyToOrder < 1) {
+        $qtyToOrder = (int) $part['threshold_qty'];
+    }
 
+    create_purchase_request(
+        (int) $part['id'],
+        $qtyToOrder,
+        $requestedBy,
+        $referenceNo,
+        'Automatic low-stock reorder for ' . $part['part_name'],
+        'set_max'
+    );
+
+    if (!threshold_inventory_log_exists((int) $part['id'], $referenceNo)) {
         insert_inventory_log(
             (int) $part['id'],
             'threshold',
@@ -298,14 +418,35 @@ function check_and_raise_low_stock($partId, $referenceNo, $requestedBy)
             $referenceNo,
             'Low inventory update sent to purchasing'
         );
-
-        log_digital(
-            'Inventory System',
-            $referenceNo,
-            'Low inventory update: ' . $part['part_name'] . ' reached threshold',
-            $requestedBy
-        );
     }
+
+    $message = 'Low inventory update: ' . $part['part_name'] . ' reached threshold';
+    if (!digital_log_exists('Inventory System', $referenceNo, $message)) {
+        log_digital('Inventory System', $referenceNo, $message, $requestedBy);
+    }
+
+    return true;
+}
+
+function run_inventory_threshold_monitor($requestedBy = null, $referenceNo = null)
+{
+    $lowStockParts = db_select('SELECT id FROM parts WHERE stock_qty <= threshold_qty ORDER BY id ASC');
+    if (empty($lowStockParts)) {
+        return 0;
+    }
+
+    if ($referenceNo === null || trim((string) $referenceNo) === '') {
+        $referenceNo = 'LOW-STOCK-' . date('Ymd');
+    }
+
+    $triggeredCount = 0;
+    foreach ($lowStockParts as $part) {
+        if (check_and_raise_low_stock((int) $part['id'], $referenceNo, $requestedBy)) {
+            $triggeredCount++;
+        }
+    }
+
+    return $triggeredCount;
 }
 
 function sum_value($sql, $types = '', $params = [])

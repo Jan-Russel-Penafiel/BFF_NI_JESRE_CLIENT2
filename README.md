@@ -32,6 +32,7 @@ You can create additional users in `register.php`.
    - Live inventory query
    - If stock unavailable, auto prepare supplier order and set order status to pending stock
    - If stock available, generate digital sales order for cashier
+   - Orders cannot be moved to cashier queue while any item is out of stock
 
 2. Cashier Department (`cashier.php`)
    - Receive sales order
@@ -45,11 +46,14 @@ You can create additional users in `register.php`.
    - Auto deduct stock upon sale
    - Check threshold
    - Trigger low stock reorder and update notifications
+   - Run automatic low-stock monitoring without repeatedly inflating existing supplier order quantities
 
 4. Purchasing Department (`purchasing.php`)
    - Prepare supplier orders (manual and automatic)
    - Receive goods
    - Update inventory database on receiving
+   - Only requested purchase orders can be received through the dedicated receive flow
+   - Automatically release eligible pending sales orders to cashier after stock receiving
 
 5. Accounting Department (`accounting.php`)
    - Record transactions to general ledger
@@ -58,6 +62,7 @@ You can create additional users in `register.php`.
 
 6. Financial Reporting (`reports.php`)
    - Automated posting summary
+   - Revenue and tax are recognized by payment date for period accuracy
    - Income Statement generation
    - Balance Sheet generation
 
